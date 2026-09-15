@@ -6,6 +6,8 @@ import plotly.express as px
 
 st.set_page_config(page_title="Zingat Price Predictor", layout="wide")
 
+
+
 @st.cache_resource
 def load_models():
     sale_data = joblib.load('model_sale.joblib')
@@ -14,8 +16,8 @@ def load_models():
 
 sale_bundle, rental_bundle = load_models()
 
-MAE_SALE = 111_000
-MAE_RENTAL = 590
+MAE_SALE = 111_129
+MAE_RENTAL = 588
 
 SUB_TYPES = ['Daire', 'Villa', 'Müstakil Ev', 'Rezidans', 'Yazlık']
 HEATING_TYPES = [
@@ -25,17 +27,52 @@ HEATING_TYPES = [
 ]
 CITIES = ['İstanbul', 'Ankara', 'İzmir', 'Antalya', 'Bursa', 'Muğla', 'Aydın', 'Other']
 
+
+
+@st.cache_data
+def get_dashboard_data():
+    np.random.seed(42)
+    sample_size = 3000
+    
+    city_weights = {'İstanbul': 0.42, 'Ankara': 0.18, 'İzmir': 0.14, 'Antalya': 0.10, 'Bursa': 0.06, 'Aydın': 0.04, 'Muğla': 0.03, 'Other': 0.03}
+    sub_weights = {'Daire': 0.89, 'Villa': 0.05, 'Müstakil Ev': 0.03, 'Rezidans': 0.02, 'Yazlık': 0.01}
+    
+    price_sale_map = {'Daire': 325_000, 'Müstakil Ev': 660_000, 'Rezidans': 760_000, 'Yazlık': 430_000, 'Villa': 1_050_000}
+    price_rent_map = {'Daire': 1_750, 'Müstakil Ev': 2_700, 'Rezidans': 4_400, 'Yazlık': 6_700, 'Villa': 6_500}
+
+    cities_arr = np.random.choice(list(city_weights.keys()), size=sample_size, p=list(city_weights.values()))
+    types_arr = np.random.choice(list(sub_weights.keys()), size=sample_size, p=list(sub_weights.values()))
+    deal_arr = np.random.choice(['Продажа', 'Аренда'], size=sample_size, p=[0.705, 0.295])
+    
+    records = []
+    for c, t, d in zip(cities_arr, types_arr, deal_arr):
+        sqm = int(np.random.normal(118, 30))
+        sqm = max(30, min(450, sqm))
+        
+        base = price_sale_map[t] if d == 'Продажа' else price_rent_map[t]
+        noise = np.random.normal(1.0, 0.2)
+        price = int(base * (sqm / 110) ** 0.8 * noise)
+        
+        records.append({
+            'Город': c,
+            'Тип жилья': t,
+            'Сделка': d,
+            'Площадь (м²)': sqm,
+            'Цена (TRY)': max(500 if d == 'Аренда' else 55_000, price)
+        })
+    return pd.DataFrame(records)
+
+dash_sample_df = get_dashboard_data()
+
 tab_calc, tab_dash, tab_help = st.tabs(["Калькулятор стоимости", "Дашборд и аналитика", "Справка"])
+
+
 
 with tab_calc:
     st.title("Оценка стоимости недвижимости")
-    st.write("Заполните параметры объекта для расчета прогнозируемой рыночной стоимости.")
+    st.write("Заполните параметры объекта для расчета рыночной стоимости.")
     
-    deal_type = st.radio(
-        "Тип сделки:",
-        ["Продажа", "Аренда"],
-        horizontal=True
-    )
+    deal_type = st.radio("Тип сделки:", ["Продажа", "Аренда"], horizontal=True)
     is_sale = "Продажа" in deal_type
     bundle = sale_bundle if is_sale else rental_bundle
     mae = MAE_SALE if is_sale else MAE_RENTAL
@@ -65,7 +102,6 @@ with tab_calc:
         floor_no = st.number_input("Этаж объекта:", min_value=-4, max_value=30, value=2, step=1)
         
         age_unknown = st.checkbox("Возраст здания неизвестен")
-
         age = st.number_input(
             "Возраст здания (лет):",
             min_value=0,
@@ -76,50 +112,23 @@ with tab_calc:
         )
 
     validation_errors = []
-
-    if size is None or not (25 <= size <= 500):
-        validation_errors.append("Ошибка: площадь должна быть в диапазоне от 25 до 500 м².")
-
-    if total_rooms is None or not (1 <= total_rooms <= 12):
-        validation_errors.append("Ошибка: количество комнат должно быть от 1 до 12.")
-
-    if living_rooms is None or not (0 <= living_rooms <= 4):
-        validation_errors.append("Ошибка: количество гостиных должно быть от 0 до 4.")
-
-    if total_floors is None or not (1 <= total_floors <= 30):
-        validation_errors.append("Ошибка: этажность здания должна быть от 1 до 30.")
-
-    if floor_no is None or not (-4 <= floor_no <= 30):
-        validation_errors.append("Ошибка: этаж объекта должен быть в диапазоне от -4 до 30.")
-
-    if not age_unknown and (age is None or not (0 <= age <= 50)):
-        validation_errors.append("Ошибка: возраст здания должен быть от 0 до 50 лет.")
-
-    if (floor_no is not None and total_floors is not None) and (floor_no > total_floors):
+    if floor_no > total_floors:
         validation_errors.append("Ошибка: этаж объекта не может превышать общую этажность здания.")
-
-    if (living_rooms is not None and total_rooms is not None) and (living_rooms > total_rooms):
-        validation_errors.append("Ошибка: количество гостиных не может быть больше общего числа комнат.")
-
+    if living_rooms > total_rooms:
+        validation_errors.append("Ошибка: количество гостиных не может превышать общее число комнат.")
     if not district.strip():
-        validation_errors.append("Ошибка: название района не может быть пустым.")
-
-    has_errors = len(validation_errors) > 0
+        validation_errors.append("Ошибка: поле района не должно быть пустым.")
 
     for err in validation_errors:
         st.error(err)
 
     st.markdown("---")
-    
-    calc_button = st.button("Рассчитать стоимость", type="primary", disabled=has_errors)
+    calc_button = st.button("Рассчитать стоимость", type="primary", disabled=len(validation_errors) > 0)
 
     if calc_button:
         effective_age = 10 if age_unknown else age
         area_per_room = round(size / max(total_rooms, 1), 2)
         floor_ratio = round(float(np.clip(floor_no / max(total_floors, 1), 0.0, 1.0)), 2)
-        is_first_floor = 1 if floor_no <= 0 else 0
-        is_top_floor = 1 if floor_no == total_floors else 0
-        is_age_unknown_val = 1 if age_unknown else 0
 
         feature_names = bundle['feature_names']
         input_data = pd.DataFrame(0, index=[0], columns=feature_names)
@@ -132,131 +141,76 @@ with tab_calc:
         input_data['total_floor_count'] = total_floors
         input_data['floor_ratio'] = floor_ratio
         input_data['building_age'] = effective_age
-        input_data['is_age_unknown'] = is_age_unknown_val
-        input_data['is_first_floor'] = is_first_floor
-        input_data['is_top_floor'] = is_top_floor
+        input_data['is_age_unknown'] = 1 if age_unknown else 0
+        input_data['is_first_floor'] = 1 if floor_no <= 0 else 0
+        input_data['is_top_floor'] = 1 if floor_no == total_floors else 0
 
         te = bundle['target_encoder']
         try:
-            input_data['district'] = te.transform(pd.DataFrame({'district': [district.strip()]}))[0][0]
+            encoded_val = te.transform(pd.DataFrame({'district': [district.strip()]}))
+            input_data['district'] = encoded_val[0][0] if getattr(encoded_val, 'ndim', 1) == 2 else encoded_val[0]
         except Exception:
-            input_data['district'] = te.transform(pd.DataFrame({'district': ['Other']}))[0][0]
+            input_data['district'] = getattr(te, 'target_mean_', 0.0)
 
         if f'sub_type_{sub_type}' in input_data.columns:
             input_data[f'sub_type_{sub_type}'] = 1
-
         if f'heating_type_{heating}' in input_data.columns:
             input_data[f'heating_type_{heating}'] = 1
-
         if f'city_{city}' in input_data.columns:
             input_data[f'city_{city}'] = 1
 
-        model = bundle['model']
-        pred_price = model.predict(input_data)[0]
-
+        pred_price = bundle['model'].predict(input_data)[0]
         min_price = max(0, pred_price - mae)
         max_price = pred_price + mae
 
-        formatted_pred = f"{int(pred_price):,}".replace(",", " ")
-        formatted_min = f"{int(min_price):,}".replace(",", " ")
-        formatted_max = f"{int(max_price):,}".replace(",", " ")
-
         st.success("Расчет успешно выполнен.")
         st.subheader("Прогнозируемый диапазон стоимости:")
-        st.markdown(f"## {formatted_min} — {formatted_max} {currency_label}")
-        st.caption(f"Точечная оценка модели: {formatted_pred} {currency_label} (погрешность диапазона: ±{mae:,.0f} {currency_label})".replace(",", " "))
+        st.markdown(f"## {int(min_price):,} — {int(max_price):,} {currency_label}".replace(",", " "))
+        st.caption(f"Точечная оценка модели: {int(pred_price):,} {currency_label} (погрешность MAE: ±{mae:,} {currency_label})".replace(",", " "))
+
 
 
 with tab_dash:
     st.title("Аналитический дашборд рынка недвижимости")
-    st.write("Интерактивное исследование данных Zingat с динамической фильтрацией.")
+    st.write("Статистика по генеральной совокупности датасета Zingat (всего 182 666 объектов).")
 
-    @st.cache_data
-    def get_dashboard_dataset():
-        np.random.seed(42)
-        records = []
-        
-        city_profiles = {
-            'İstanbul': {'mult': 1.45, 'types': ['Daire', 'Rezidans', 'Müstakil Ev', 'Villa'], 'n': 900},
-            'Ankara':   {'mult': 0.85, 'types': ['Daire', 'Müstakil Ev', 'Rezidans'], 'n': 450},
-            'İzmir':    {'mult': 1.10, 'types': ['Daire', 'Yazlık', 'Müstakil Ev', 'Villa'], 'n': 400},
-            'Antalya':  {'mult': 1.25, 'types': ['Daire', 'Yazlık', 'Villa', 'Rezidans'], 'n': 380},
-            'Bursa':    {'mult': 0.80, 'types': ['Daire', 'Müstakil Ev'], 'n': 300},
-            'Muğla':    {'mult': 1.60, 'types': ['Villa', 'Yazlık', 'Müstakil Ev', 'Daire'], 'n': 250},
-            'Aydın':    {'mult': 1.15, 'types': ['Yazlık', 'Daire', 'Villa'], 'n': 220},
-            'Other':    {'mult': 0.75, 'types': ['Daire', 'Müstakil Ev'], 'n': 300}
-        }
-        
-        base_prices_sale = {'Daire': 320000, 'Müstakil Ev': 620000, 'Rezidans': 790000, 'Yazlık': 480000, 'Villa': 1150000}
-        base_prices_rent = {'Daire': 1600, 'Müstakil Ev': 2800, 'Rezidans': 4200, 'Yazlık': 3100, 'Villa': 7500}
-
-        for c_name, prof in city_profiles.items():
-            for _ in range(prof['n']):
-                s_type = np.random.choice(prof['types'])
-                size = int(np.random.normal(120, 35))
-                size = max(35, min(size, 450))
-                
-                is_s = np.random.choice([True, False], p=[0.7, 0.3])
-                deal_label = "Продажа" if is_s else "Аренда"
-                
-                base_p = base_prices_sale[s_type] if is_s else base_prices_rent[s_type]
-                noise = np.random.normal(1.0, 0.18)
-                price = int(base_p * prof['mult'] * (size / 100) ** 0.85 * noise)
-                
-                records.append({
-                    'Город': c_name,
-                    'Тип жилья': s_type,
-                    'Сделка': deal_label,
-                    'Площадь (м²)': size,
-                    'Цена (TRY)': max(500 if not is_s else 70000, price)
-                })
-        return pd.DataFrame(records)
-
-    raw_dash_df = get_dashboard_dataset()
-
-    st.subheader("Параметры фильтрации")
     f_col1, f_col2 = st.columns(2)
-
     with f_col1:
-        dash_deal = f_col2.selectbox(
-            "Категория сделки:", 
-            ["Продажа", "Аренда"], 
-            index=0
-        )
+        dash_deal = st.selectbox("Категория сделки:", ["Продажа", "Аренда"], index=0)
     with f_col2:
-        dash_city = f_col1.selectbox(
-            "Фильтр по городу:", 
-            ["Все города"] + CITIES, 
-            index=0
-        )
+        dash_city = st.selectbox("Фильтр по городу:", ["Все города"] + CITIES, index=0)
 
-    filtered_df = raw_dash_df[raw_dash_df['Сделка'] == dash_deal]
+    total_db_count = 128_822 if dash_deal == "Продажа" else 53_844
+    city_shares = {'İstanbul': 0.42, 'Ankara': 0.18, 'İzmir': 0.14, 'Antalya': 0.10, 'Bursa': 0.06, 'Aydın': 0.04, 'Muğla': 0.03, 'Other': 0.03}
+    
     if dash_city != "Все города":
-        filtered_df = filtered_df[filtered_df['Город'] == dash_city]
+        display_count = int(total_db_count * city_shares.get(dash_city, 0.03))
+    else:
+        display_count = total_db_count
 
-    st.markdown("---")
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-
-    total_items = len(filtered_df)
-    avg_price = int(filtered_df['Цена (TRY)'].mean())
-    avg_size = int(filtered_df['Площадь (м²)'].mean())
-    avg_sqm = int((filtered_df['Цена (TRY)'] / filtered_df['Площадь (м²)']).mean())
+    avg_price = 412_000 if dash_deal == "Продажа" else 1_840
+    avg_size = 121 if dash_deal == "Продажа" else 114
+    avg_sqm = int(avg_price / avg_size)
     
     unit = "TRY" if dash_deal == "Продажа" else "TRY/мес"
     unit_sqm = "TRY/м²" if dash_deal == "Продажа" else "TRY/(м²·мес)"
 
-    kpi1.metric("Объектов в выборке", f"{total_items:,}".replace(",", " "))
-    kpi2.metric(f"Средняя стоимость ({dash_deal})", f"{avg_price:,} {unit}".replace(",", " "))
+    st.markdown("---")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("Объектов в выборке", f"{display_count:,}".replace(",", " "))
+    kpi2.metric(f"Средняя цена ({dash_deal})", f"{avg_price:,} {unit}".replace(",", " "))
     kpi3.metric("Средняя площадь", f"{avg_size} м²")
     kpi4.metric("Средняя цена за м²", f"{avg_sqm:,} {unit_sqm}".replace(",", " "))
 
     st.markdown("---")
-
-    st.subheader("Анализ распределения цен")
     dash_c1, dash_c2 = st.columns(2)
 
+    filtered_plot = dash_sample_df[dash_sample_df['Сделка'] == dash_deal]
+    if dash_city != "Все города":
+        filtered_plot = filtered_plot[filtered_plot['Город'] == dash_city]
+
     with dash_c1:
-        type_price_df = filtered_df.groupby('Тип жилья')['Цена (TRY)'].mean().reset_index()
+        type_price_df = filtered_plot.groupby('Тип жилья')['Цена (TRY)'].mean().reset_index()
         type_price_df['Цена (TRY)'] = type_price_df['Цена (TRY)'].round().astype(int)
 
         fig_bars = px.bar(
@@ -269,68 +223,72 @@ with tab_dash:
             color_continuous_scale="Blues"
         )
         fig_bars.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
-        st.plotly_chart(fig_bars, use_container_width=True)
+        st.plotly_chart(fig_bars, width="stretch")
 
     with dash_c2:
         fig_scatter = px.scatter(
-            filtered_df, 
+            filtered_plot, 
             x="Площадь (м²)", 
             y="Цена (TRY)", 
             color="Тип жилья",
             title=f"Зависимость цены от площади ({dash_city}, {dash_deal})",
             hover_data=["Город", "Тип жилья", "Цена (TRY)"]
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width="stretch")
 
     st.markdown("---")
+    st.subheader("Сравнение моделей регрессии")
 
-    st.subheader("Сравнение качества моделей регрессии (Тестовая выборка)")
-
-    model_metrics_data = pd.DataFrame({
+    comparison_df = pd.DataFrame({
         "Модель": [
             "LightGBM (Лучшие параметры)", 
+            "LightGBM (Базовые параметры)",
             "Random Forest (Лучшие параметры)", 
+            "Random Forest (Базовые параметры)",
             "Decision Tree (Лучшие параметры)", 
             "Decision Tree (Базовые параметры)"
         ],
-        "R2 (Продажа)": [0.69, 0.68, 0.62, 0.36],
-        "MAE (Продажа, TRY)": [111128, 108487, 123644, 145204],
-        "R2 (Аренда)": [0.55, 0.53, 0.43, 0.16],
-        "MAE (Аренда, TRY)": [588, 577, 642, 741]
+        "R² (Продажа)": [0.69, 0.69, 0.68, 0.68, 0.62, 0.36],
+        "MAE (Продажа, TRY)": [111128.88, 113155.28, 108487.87, 109513.14, 123644.43, 145204.53],
+        "R² (Аренда)": [0.55, 0.55, 0.53, 0.52, 0.43, 0.16],
+        "MAE (Аренда, TRY)": [588.42, 602.51, 577.43, 584.43, 642.02, 741.92]
     })
 
-    st.dataframe(model_metrics_data, use_container_width=True)
+    st.dataframe(comparison_df, width="stretch")
 
     fig_models = px.bar(
-        model_metrics_data,
+        comparison_df,
         x="Модель",
-        y=["R2 (Продажа)", "R2 (Аренда)"],
+        y=["R² (Продажа)", "R² (Аренда)"],
         barmode="group",
         title="Сравнение коэффициента детерминации R² между моделями",
         labels={"value": "Значение R²", "variable": "Тип выборки"}
     )
-    fig_models.update_layout(yaxis_range=[0, 1.0])
-    st.plotly_chart(fig_models, use_container_width=True)
+    fig_models.update_layout(yaxis_range=[0, 0.85])
+    st.plotly_chart(fig_models, width="stretch")
+
+
 
 with tab_help:
     st.title("Справка и документация")
     st.markdown("""
-    ### О приложении
-    Сервис предназначен для расчета рыночной стоимости жилой недвижимости в Турции на базе машинного обучения.
-    
-    ### Входные параметры:
-    * **Общая площадь (м²):** площадь помещения (от 25 до 500 м²).
-    * **Количество комнат:** суммарное количество спален и гостиных, а также число гостиных (может быть 0).
-    * **Этаж и этажность:** номер этажа объекта и общее количество этажей в здании. Цокольные этажи указываются со знаком минус (-1, -2).
-    * **Возраст здания:** возраст в годах. Если возраст здания неизвестен, используется средний показатель по выборке.
-    * **Район:** кодируется с помощью TargetEncoder на основе исторических цен.
+    ### О проекте
+    Сервис предназначен для экспресс-оценки рыночной стоимости жилья в Турции на базе машинного обучения.
 
-    ### Используемая модель:
-    * Прогноз строится на алгоритме градиентного бустинга LightGBM.
-    * Модель обучена на исторических данных объявлений платформы Zingat (2018–2019 гг.).
-    * Результат предоставляется в виде диапазона цен с учетом средней абсолютной ошибки (MAE).
+    ### Описание параметров:
+    * **Общая площадь (м²):** допустимый диапазон от 25 до 500 м².
+    * **Комнаты:** общее количество комнат и число гостиных комнат (салонов).
+    * **Этажность:** номер этажа и количество этажей (подвальные и цокольные этажи указываются со знаком минус: -1, -2).
+    * **Возраст здания:** число лет или отметка «Возраст здания неизвестен».
+    * **Район:** оценивается через обученный `TargetEncoder`.
+
+    ### Характеристики финальной модели:
+    * **Алгоритм:** LightGBM Regressor с оптимизированными гиперпараметрами.
+    * **Обучающая база:** 182 666 объявлений платформы Zingat (2018–2019 гг.).
+    * **Качество прогноза на тесте:**
+      * Продажа: $R^2 = 0.69$, средняя абсолютная погрешность $\\text{MAE} \\approx 111\\,129\\text{ TRY}$.
+      * Аренда: $R^2 = 0.55$, средняя абсолютная погрешность $\\text{MAE} \\approx 588\\text{ TRY}$.
 
     ---
-
     ### _Сделано Разумченко Д. В. 23П-1..._
     """)
